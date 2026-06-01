@@ -520,8 +520,8 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
                         }
                     }
 
-                    let last_colon = if second_space > 11 {
-                        find_byte_backward(COMMON_BUF.as_ptr(), 8, second_space - 3, b':').unwrap_or(0)
+                    let last_colon = if second_space > 10 {
+                        find_byte_backward(COMMON_BUF.as_ptr(), 8, second_space - 2, b':').unwrap_or(0)
                     } else {
                         0
                     };
@@ -538,7 +538,7 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
                         set_res(5, 3);
                         set_res(6, port);
                         set_res(7, len as i32);
-                        set_res(8, 0);
+                        set_res(8, if port == 53 { 1 } else { 0 });
                         set_res(9, 8);
                         set_res(10, (last_colon - 8) as i32);
                         set_res(11, 3);

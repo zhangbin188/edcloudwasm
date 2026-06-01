@@ -580,6 +580,47 @@ const dohDnsHandler = async (payload) => {
     packet.set(new Uint8Array(dnsQueryResult), 2);
     return packet;
 };
+const createDnsWriter = (state, writable, close, closeAfterResponse) => {
+    let pending = emptyU8, closed = false;
+    const sendDnsResponse = async (dnsPack) => {
+        if (state.ssOutbound) {
+            if (state.ssResponseSalt) {
+                writable.send(state.ssResponseSalt);
+                state.ssResponseSalt = null;
+            }
+            const encryptedDns = await ssAeadEncryptChunks(state.ssOutbound, dnsPack);
+            if (encryptedDns.byteLength) writable.send(encryptedDns);
+        } else {
+            writable.send(dnsPack);
+        }
+    };
+    return async (chunk) => {
+        if (closed || !chunk?.byteLength) return;
+        chunk = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        let buf = chunk;
+        if (pending.byteLength) {
+            buf = new Uint8Array(pending.byteLength + chunk.byteLength);
+            buf.set(pending);
+            buf.set(chunk, pending.byteLength);
+            pending = emptyU8;
+        }
+        let offset = 0;
+        while (buf.byteLength - offset >= 2) {
+            const dnsLen = (buf[offset] << 8) | buf[offset + 1];
+            const end = offset + 2 + dnsLen;
+            if (buf.byteLength < end) break;
+            const dnsPack = await dohDnsHandler(buf.subarray(offset, end));
+            if (dnsPack?.byteLength) await sendDnsResponse(dnsPack);
+            offset = end;
+            if (closeAfterResponse) {
+                closed = true;
+                close();
+                return;
+            }
+        }
+        if (offset < buf.byteLength) pending = buf.slice(offset);
+    };
+};
 const connectNat64 = async (addrType, port, nat64Auth, addrBytes, proxyAll, limit, isHttp) => {
     const nat64Prefixes = nat64Auth.charCodeAt(0) === 91 ? nat64Auth.slice(1, -1) : nat64Auth;
     if (!proxyAll) return concurrentConnect(`[${nat64Prefixes}6815:3598]`, port, limit);
@@ -862,20 +903,11 @@ const handleSession = async (chunk, state, request, writable, close, isEarlyData
         payload = chunk.subarray(parsedRequest.dataOffset);
     }
     if (parsedRequest.isDns) {
-        const dnsPack = await dohDnsHandler(payload);
-        if (dnsPack?.byteLength) {
-            if (isSs || state.ssOutbound) {
-                if (state.ssResponseSalt) {
-                    writable.send(state.ssResponseSalt);
-                    state.ssResponseSalt = null;
-                }
-                const encryptedDns = await ssAeadEncryptChunks(state.ssOutbound, dnsPack);
-                if (encryptedDns.byteLength) writable.send(encryptedDns);
-            } else {
-                writable.send(dnsPack);
-            }
-        }
-        if (!isEarlyData) return close();
+        const dnsWriter = createDnsWriter(state, writable, close, !(isEarlyData && payload.byteLength));
+        state.tcpWriter = (isSs || state.ssOutbound) ? async (c) => {
+            await ssAeadDecryptFeed(state.ssInbound, c instanceof Uint8Array ? c : new Uint8Array(c), dnsWriter);
+        } : dnsWriter;
+        return await dnsWriter(payload);
     } else {
         state.tcpSocket = await establishTcpConnection(parsedRequest, request);
         if (!state.tcpSocket) return close();
