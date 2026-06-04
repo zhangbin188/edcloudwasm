@@ -113,7 +113,7 @@ const initializeWasm = (env) => {
         wasmMem.set(socks5Pkg, getSocks5AuthPtr());
         setSocks5AuthLenWasm(socks5Pkg.length);
     }
-    cachedTemplates = new Array(14);
+    cachedTemplates = new Array(13);
     const subUuid = uuid || crypto.randomUUID();
     const subPassword = password || crypto.randomUUID();
     globalThis.subUuid = subUuid;
@@ -125,7 +125,7 @@ const initializeWasm = (env) => {
     for (let i = 0; i < 20; i++) {strList[i] = getSecret(i)}
     const edge = strList[2];
     userAgentSuffix = edge + strList[3] + edge + strList[4];
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 13; i++) {
         const len = getTemplateWasm(i);
         const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
         const baseTmpl = tmpl.replaceAll("{{ECHDNS}}", encodeURIComponent(sharedEchDns));
@@ -1076,13 +1076,16 @@ const getSub = async (request, url, uuid) => {
             });
         }
     };
-    const addNodes = (base) => {
-        if (hasWS) processTemplate(base + (hasWsNoTLS ? 2 : hasECH ? 1 : 0), hasWsNoTLS ? 80 : 443);
-        if (hasXhttp) processTemplate(base + (hasECH ? 4 : 3));
-        if (hasGRPC) processTemplate(base + (hasECH ? 6 : 5));
+    const addNodes = (base, allowWsNoTLS) => {
+        const wsNoTLS = allowWsNoTLS && hasWsNoTLS;
+        const xhttpBase = base + (allowWsNoTLS ? 3 : 2);
+        const grpcBase = base + (allowWsNoTLS ? 5 : 4);
+        if (hasWS) processTemplate(base + (wsNoTLS ? 2 : hasECH ? 1 : 0), wsNoTLS ? 80 : 443);
+        if (hasXhttp) processTemplate(xhttpBase + (hasECH ? 1 : 0));
+        if (hasGRPC) processTemplate(grpcBase + (hasECH ? 1 : 0));
     };
-    if (hasVL) addNodes(0);
-    if (hasTR) addNodes(7);
+    if (hasVL) addNodes(0, true);
+    if (hasTR) addNodes(7, false);
     const finalLinks = parts.join("\n");
     const base64Links = btoa(unescape(encodeURIComponent(finalLinks)));
     if (ua.includes(strList[18])) return new Response(base64Links, {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
