@@ -422,6 +422,47 @@ const manualPipe = async (readable, writable, close) => {
         }
     } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer()}
 };
+const createBufferedTcpWriter = (tcpWriter, close) => {
+    let buffer = new Uint8Array(maxChunkLen), offset = 0, timerId = null, isClosed = false;
+    const onWriteError = () => {
+        isClosed = true;
+        close?.();
+    };
+    const write = (chunk) => {
+        if (isClosed) return;
+        tcpWriter.write(chunk).catch(onWriteError);
+    };
+    const flush = () => {
+        timerId && (clearTimeout(timerId), timerId = null);
+        if (isClosed) return offset = 0;
+        if (!offset) return;
+        write(buffer.subarray(0, offset));
+        offset = 0;
+    };
+    return (chunk) => {
+        if (isClosed || !chunk?.byteLength) return;
+        const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        const len = data.byteLength;
+        if (len > (maxChunkLen >> 1)) {
+            flush();
+            return write(data);
+        }
+        const available = maxChunkLen - offset;
+        if (len >= available) {
+            buffer.set(data.subarray(0, available), offset);
+            flush();
+            const remainder = len - available;
+            if (remainder > 0) {
+                buffer.set(data.subarray(available), 0);
+                offset = remainder;
+            }
+        } else {
+            buffer.set(data, offset);
+            offset += len;
+        }
+        offset > 0 && (timerId ||= setTimeout(flush, 1));
+    };
+};
 const handleSession = async (chunk, state, request, writable, close, isEarlyData = false) => {
     state.needMore = false;
     const parsed = parseProtocolChunk(chunk);
@@ -437,8 +478,9 @@ const handleSession = async (chunk, state, request, writable, close, isEarlyData
         state.tcpSocket = await establishTcpConnection(parsedRequest, request);
         if (!state.tcpSocket) return close();
         const tcpWriter = state.tcpSocket.writable.getWriter();
-        if (payload.byteLength) await tcpWriter.write(payload);
-        state.tcpWriter = (c) => tcpWriter.write(c);
+        const bufferedTcpWriter = createBufferedTcpWriter(tcpWriter, close);
+        if (payload.byteLength) tcpWriter.write(payload);
+        state.tcpWriter = bufferedTcpWriter;
         manualPipe(state.tcpSocket.readable, writable, close);
     }
 };
