@@ -9,6 +9,7 @@ const bufferSize = 512 * 1024;
 const startThreshold = 50 * 1024 * 1024;
 const maxChunkLen = 64 * 1024;
 const flushTime = 10;
+const urlParamCacheLimit = 20;
 const proxyStrategyOrder = ['socks', 'http'];
 const proxyIpAddrs = {EU: 'ProxyIP.DE.CMLiussss.net', AS: 'ProxyIP.SG.CMLiussss.net', JP: 'ProxyIP.JP.CMLiussss.net', US: 'ProxyIP.US.CMLiussss.net'};//分区域proxyip
 const coloRegions = {
@@ -185,29 +186,47 @@ const strategyExecutorMap = new Map([
         return createConnect(host, port);
     }]
 ]);
+const urlListCacheDict = Object.create(null), urlListCacheKeys = new Array(urlParamCacheLimit);
+let urlListCacheIndex = 0;
 const paramRegex = /(gs5|s5all|ghttp|httpall|s5|socks|http|ip)(?:=|:\/\/|%3A%2F%2F)([^&]+)|(proxyall|globalproxy)/gi;
 const establishTcpConnection = async (parsedRequest, request) => {
-    let u = request.url, clean = u.slice(u.indexOf('/', 10) + 1), list = [];
-    if (clean.length < 6) {list.push({type: 0}, {type: 3, param: coloToProxyMap.get(request.cf?.colo) ?? proxyIpAddrs.US})} else {
-        paramRegex.lastIndex = 0;
-        let m, p = Object.create(null);
-        while ((m = paramRegex.exec(clean))) p[(m[1] || m[3]).toLowerCase()] = m[2] ? (m[2].charCodeAt(m[2].length - 1) === 61 ? m[2].slice(0, -1) : m[2]) : true;
-        const s5 = p.gs5 || p.s5all || p.s5 || p.socks, http = p.ghttp || p.httpall || p.http;
-        const proxyAll = !!(p.gs5 || p.s5all || p.ghttp || p.httpall || p.proxyall || p.globalproxy);
-        if (!proxyAll) list.push({type: 0});
-        const add = (v, t) => {
-            if (!v) return;
-            const parts = decodeURIComponent(v).split(',');
-            for (let i = 0; i < parts.length; i++) if (parts[i]) list.push({type: t, param: parts[i]});
-        };
-        for (let i = 0; i < proxyStrategyOrder.length; i++) {
-            const k = proxyStrategyOrder[i];
-            k === 'socks' ? add(s5, 1) : k === 'http' ? add(http, 2) : 0;
+    let u = request.url, clean = u.slice(u.indexOf('/', 10) + 1), l = clean.length, list = [];
+    if (l > 3 && clean.charCodeAt(l - 4) === 47 && clean.charCodeAt(l - 3) === 84 && clean.charCodeAt(l - 2) === 117 && clean.charCodeAt(l - 1) === 110) {
+        clean = clean.slice(0, l - 4);
+    } else {
+        const c = clean.charCodeAt(l - 1);
+        if (c === 47 || c === 61) clean = clean.slice(0, l - 1);
+    }
+    const cachedList = urlListCacheDict[clean];
+    if (cachedList !== undefined) {
+        list = cachedList;
+    } else {
+        if (clean.length < 6) {list.push({type: 0}, {type: 3, param: coloToProxyMap.get(request.cf?.colo) ?? proxyIpAddrs.US})} else {
+            paramRegex.lastIndex = 0;
+            let m, p = Object.create(null);
+            while ((m = paramRegex.exec(clean))) p[(m[1] || m[3]).toLowerCase()] = m[2] ? (m[2].charCodeAt(m[2].length - 1) === 61 ? m[2].slice(0, -1) : m[2]) : true;
+            const s5 = p.gs5 || p.s5all || p.s5 || p.socks, http = p.ghttp || p.httpall || p.http;
+            const proxyAll = !!(p.gs5 || p.s5all || p.ghttp || p.httpall || p.proxyall || p.globalproxy);
+            if (!proxyAll) list.push({type: 0});
+            const add = (v, t) => {
+                if (!v) return;
+                const parts = decodeURIComponent(v).split(',');
+                for (let i = 0; i < parts.length; i++) if (parts[i]) list.push({type: t, param: parts[i]});
+            };
+            for (let i = 0; i < proxyStrategyOrder.length; i++) {
+                const k = proxyStrategyOrder[i];
+                k === 'socks' ? add(s5, 1) : k === 'http' ? add(http, 2) : 0;
+            }
+            if (proxyAll) {if (!list.length) list.push({type: 0})} else {
+                add(p.ip, 3);
+                list.push({type: 3, param: coloToProxyMap.get(request.cf?.colo) ?? proxyIpAddrs.US});
+            }
         }
-        if (proxyAll) {if (!list.length) list.push({type: 0})} else {
-            add(p.ip, 3);
-            list.push({type: 3, param: coloToProxyMap.get(request.cf?.colo) ?? proxyIpAddrs.US});
-        }
+        const oldKey = urlListCacheKeys[urlListCacheIndex];
+        if (oldKey !== undefined) delete urlListCacheDict[oldKey];
+        urlListCacheKeys[urlListCacheIndex] = clean;
+        urlListCacheDict[clean] = list;
+        urlListCacheIndex = (urlListCacheIndex + 1) % urlParamCacheLimit;
     }
     for (let i = 0; i < list.length; i++) {
         try {
@@ -217,23 +236,11 @@ const establishTcpConnection = async (parsedRequest, request) => {
     }
     return null;
 };
-const chunkIdxLookup = new Uint8Array(60);
-for (let i = 0; i < 60; i++) {
-    let len = i << 9;
-    if (len < 1536) chunkIdxLookup[i] = 0;
-    else if (len < 2048) chunkIdxLookup[i] = 1;
-    else if (len < 2560) chunkIdxLookup[i] = 2;
-    else if (len < 3072) chunkIdxLookup[i] = 3;
-    else if (len < 3584) chunkIdxLookup[i] = 4;
-    else if (len < 4096) chunkIdxLookup[i] = 5;
-    else if (len < 5120) chunkIdxLookup[i] = 6;
-    else if (len < 6144) chunkIdxLookup[i] = 7;
-    else if (len < 7168) chunkIdxLookup[i] = 8;
-    else if (len < 8192) chunkIdxLookup[i] = 9;
-    else if (len < 12288) chunkIdxLookup[i] = 10;
-    else if (len < 20480) chunkIdxLookup[i] = 11;
-    else chunkIdxLookup[i] = 12;
-}
+const chunkIdxLookup = new Uint8Array([
+    0, 0, 0, 1, 2, 3, 4, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 10, 10,
+    10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12
+]);
 const lowerBounds = new Uint16Array([1024, 1536, 2048, 2560, 3072, 3584, 4096, 5120, 6144, 7168, 8192, 12288, 20480, 28672]);
 const manualPipe = async (readable, writable, close) => {
     const safeBufferSize = bufferSize - maxChunkLen, fastFlushOffset = Math.max(bufferSize / flushTime * 2, maxChunkLen * 2);
@@ -310,52 +317,64 @@ const manualPipe = async (readable, writable, close) => {
     } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer()}
 };
 const createBufferedTcpWriter = (tcpWriter, close) => {
-    let writeQueue = [], spareQueue = [], timerId = null, isClosed = false;
+    let writeQueue = [], spareQueue = [], coalesceBuffer = null, drainActive = false, closed = false;
     const closeWriter = () => {
-        if (isClosed) return;
-        isClosed = true;
-        timerId && (clearTimeout(timerId), timerId = null);
-        writeQueue.length = 0, spareQueue.length = 0, close?.();
+        if (closed) return;
+        closed = true, writeQueue.length = 0, spareQueue.length = 0, close?.();
     };
-    const drain = () => {
-        timerId = null;
-        if (isClosed) return;
-        const tasks = writeQueue;
-        writeQueue = spareQueue;
-        spareQueue = tasks;
+    const drainQueue = async () => {
+        if (closed) return;
+        drainActive = true;
         try {
-            let head = 0, taskLen = tasks.length;
-            while (head < taskLen && !isClosed) {
-                const data = tasks[head];
-                let len = data.byteLength, end = head + 1;
-                while (end < taskLen) {
-                    const nextLen = len + tasks[end].byteLength;
-                    if (nextLen > maxChunkLen) break;
-                    len = nextLen, end++;
-                }
-                if (end === head + 1) {
-                    head++, tcpWriter.write(data).catch(closeWriter);
-                } else {
-                    const out = new Uint8Array(len);
-                    out.set(data);
-                    for (let offset = data.byteLength, i = head + 1; i < end; i++) {
-                        const q = tasks[i];
-                        out.set(q, offset), offset += q.byteLength;
+            while (writeQueue.length && !closed) {
+                const queue = writeQueue;
+                writeQueue = spareQueue;
+                spareQueue = queue;
+                let index = 0, queueLength = queue.length;
+                while (index < queueLength && !closed) {
+                    const chunk = queue[index];
+                    let mergedLength = chunk.byteLength, mergeEnd = index + 1;
+                    if (mergedLength < maxChunkLen) {
+                        while (mergeEnd < queueLength) {
+                            const nextLength = mergedLength + queue[mergeEnd].byteLength;
+                            if (nextLength > maxChunkLen) break;
+                            mergedLength = nextLength, mergeEnd++;
+                        }
                     }
-                    head = end, tcpWriter.write(out).catch(closeWriter);
+                    if (mergeEnd === index + 1) {
+                        queue[index++] = undefined;
+                        await tcpWriter.write(chunk);
+                    } else {
+                        const buffer = coalesceBuffer ||= new Uint8Array(maxChunkLen);
+                        buffer.set(chunk);
+                        queue[index++] = undefined;
+                        for (let offset = chunk.byteLength; index < mergeEnd;) {
+                            const nextChunk = queue[index];
+                            queue[index++] = undefined;
+                            buffer.set(nextChunk, offset), offset += nextChunk.byteLength;
+                        }
+                        await tcpWriter.write(buffer.subarray(0, mergedLength));
+                    }
                 }
+                queue.length = 0;
             }
         } catch {closeWriter()} finally {
-            tasks.length = 0;
-            writeQueue.length && !isClosed && !timerId && (timerId = setTimeout(drain, 1));
+            drainActive = false;
+            if (writeQueue.length && !closed) {
+                drainActive = true;
+                queueMicrotask(drainQueue);
+            }
         }
     };
-    return (chunk) => {
-        if (isClosed) return false;
+    return chunk => {
+        if (closed) return false;
         const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
         if (!data.byteLength) return true;
         writeQueue.push(data);
-        !timerId && !isClosed && (timerId = setTimeout(drain, 1));
+        if (!drainActive) {
+            drainActive = true;
+            queueMicrotask(drainQueue);
+        }
         return true;
     };
 };
@@ -379,9 +398,8 @@ const handleWebSocketConn = async (webSocket, request) => {
             tcpSocket = await establishTcpConnection(parsedRequest, request);
             if (!tcpSocket) return close();
             const tcpWriter = tcpSocket.writable.getWriter();
-            const bufferedTcpWriter = createBufferedTcpWriter(tcpWriter, close);
             if (payload.byteLength) tcpWriter.write(payload);
-            tcpWrite = bufferedTcpWriter;
+            tcpWrite = createBufferedTcpWriter(tcpWriter, close);
             manualPipe(tcpSocket.readable, webSocket, close);
         } catch {close()}
     };

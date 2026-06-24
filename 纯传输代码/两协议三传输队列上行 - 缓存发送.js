@@ -423,52 +423,64 @@ const manualPipe = async (readable, writable, close) => {
     } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer()}
 };
 const createBufferedTcpWriter = (tcpWriter, close) => {
-    let writeQueue = [], spareQueue = [], timerId = null, isClosed = false;
+    let writeQueue = [], spareQueue = [], coalesceBuffer = null, drainActive = false, closed = false;
     const closeWriter = () => {
-        if (isClosed) return;
-        isClosed = true;
-        timerId && (clearTimeout(timerId), timerId = null);
-        writeQueue.length = 0, spareQueue.length = 0, close?.();
+        if (closed) return;
+        closed = true, writeQueue.length = 0, spareQueue.length = 0, close?.();
     };
-    const drain = () => {
-        timerId = null;
-        if (isClosed) return;
-        const tasks = writeQueue;
-        writeQueue = spareQueue;
-        spareQueue = tasks;
+    const drainQueue = async () => {
+        if (closed) return;
+        drainActive = true;
         try {
-            let head = 0, taskLen = tasks.length;
-            while (head < taskLen && !isClosed) {
-                const data = tasks[head];
-                let len = data.byteLength, end = head + 1;
-                while (end < taskLen) {
-                    const nextLen = len + tasks[end].byteLength;
-                    if (nextLen > maxChunkLen) break;
-                    len = nextLen, end++;
-                }
-                if (end === head + 1) {
-                    head++, tcpWriter.write(data).catch(closeWriter);
-                } else {
-                    const out = new Uint8Array(len);
-                    out.set(data);
-                    for (let offset = data.byteLength, i = head + 1; i < end; i++) {
-                        const q = tasks[i];
-                        out.set(q, offset), offset += q.byteLength;
+            while (writeQueue.length && !closed) {
+                const queue = writeQueue;
+                writeQueue = spareQueue;
+                spareQueue = queue;
+                let index = 0, queueLength = queue.length;
+                while (index < queueLength && !closed) {
+                    const chunk = queue[index];
+                    let mergedLength = chunk.byteLength, mergeEnd = index + 1;
+                    if (mergedLength < maxChunkLen) {
+                        while (mergeEnd < queueLength) {
+                            const nextLength = mergedLength + queue[mergeEnd].byteLength;
+                            if (nextLength > maxChunkLen) break;
+                            mergedLength = nextLength, mergeEnd++;
+                        }
                     }
-                    head = end, tcpWriter.write(out).catch(closeWriter);
+                    if (mergeEnd === index + 1) {
+                        queue[index++] = undefined;
+                        await tcpWriter.write(chunk);
+                    } else {
+                        const buffer = coalesceBuffer ||= new Uint8Array(maxChunkLen);
+                        buffer.set(chunk);
+                        queue[index++] = undefined;
+                        for (let offset = chunk.byteLength; index < mergeEnd;) {
+                            const nextChunk = queue[index];
+                            queue[index++] = undefined;
+                            buffer.set(nextChunk, offset), offset += nextChunk.byteLength;
+                        }
+                        await tcpWriter.write(buffer.subarray(0, mergedLength));
+                    }
                 }
+                queue.length = 0;
             }
         } catch {closeWriter()} finally {
-            tasks.length = 0;
-            writeQueue.length && !isClosed && !timerId && (timerId = setTimeout(drain, 1));
+            drainActive = false;
+            if (writeQueue.length && !closed) {
+                drainActive = true;
+                queueMicrotask(drainQueue);
+            }
         }
     };
-    return (chunk) => {
-        if (isClosed) return false;
+    return chunk => {
+        if (closed) return false;
         const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
         if (!data.byteLength) return true;
         writeQueue.push(data);
-        !timerId && !isClosed && (timerId = setTimeout(drain, 1));
+        if (!drainActive) {
+            drainActive = true;
+            queueMicrotask(drainQueue);
+        }
         return true;
     };
 };
@@ -487,9 +499,8 @@ const handleSession = async (chunk, state, request, writable, close, isEarlyData
         state.tcpSocket = await establishTcpConnection(parsedRequest, request);
         if (!state.tcpSocket) return close();
         const tcpWriter = state.tcpSocket.writable.getWriter();
-        const bufferedTcpWriter = createBufferedTcpWriter(tcpWriter, close);
         if (payload.byteLength) tcpWriter.write(payload);
-        state.tcpWriter = bufferedTcpWriter;
+        state.tcpWriter = createBufferedTcpWriter(tcpWriter, close);
         manualPipe(state.tcpSocket.readable, writable, close);
     }
 };

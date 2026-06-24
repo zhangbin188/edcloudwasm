@@ -5,6 +5,7 @@ const 緩衝區大小 = 512 * 1024;
 const 啟動閾值 = 50 * 1024 * 1024;
 const 最大區塊長度 = 64 * 1024;
 const 刷新時間 = 10;
+const 網址參數快取限制 = 20;
 const 代理策略順序 = ['socks', 'http'];
 const 代理位址表 = {EU: 'ProxyIP.DE.CMLiussss.net', AS: 'ProxyIP.SG.CMLiussss.net', JP: 'ProxyIP.JP.CMLiussss.net', US: 'ProxyIP.US.CMLiussss.net'};
 const 機房區域對照 = {
@@ -181,29 +182,47 @@ const 策略執行器映射 = new Map([
         return 建立單次連線(主機, 連接埠);
     }]
 ]);
+const 網址列表快取字典 = Object.create(null), 網址列表快取鍵 = new Array(網址參數快取限制);
+let 網址列表快取索引 = 0;
 const 參數匹配正則 = /(gs5|s5all|ghttp|httpall|s5|socks|http|ip)(?:=|:\/\/|%3A%2F%2F)([^&]+)|(proxyall|globalproxy)/gi;
 const 建立傳輸控制連線 = async (已解析請求, 請求) => {
-    let 網址字串 = 請求.url, 清理路徑 = 網址字串.slice(網址字串.indexOf('/', 10) + 1), 策略列表 = [];
-    if (清理路徑.length < 6) {策略列表.push({類型: 0}, {類型: 3, 參數: 機房到代理映射.get(請求.cf?.colo) ?? 代理位址表.US})} else {
-        參數匹配正則.lastIndex = 0;
-        let 匹配項, 暫指標 = Object.create(null);
-        while ((匹配項 = 參數匹配正則.exec(清理路徑))) 暫指標[(匹配項[1] || 匹配項[3]).toLowerCase()] = 匹配項[2] ? (匹配項[2].charCodeAt(匹配項[2].length - 1) === 61 ? 匹配項[2].slice(0, -1) : 匹配項[2]) : true;
-        const 通道設定 = 暫指標.gs5 || 暫指標.s5all || 暫指標.s5 || 暫指標.socks, 超文本設定 = 暫指標.ghttp || 暫指標.httpall || 暫指標.http;
-        const 全域代理 = !!(暫指標.gs5 || 暫指標.s5all || 暫指標.ghttp || 暫指標.httpall || 暫指標.proxyall || 暫指標.globalproxy);
-        if (!全域代理) 策略列表.push({類型: 0});
-        const 加入策略 = (暫值, 類型值) => {
-            if (!暫值) return;
-            const 分段陣列 = decodeURIComponent(暫值).split(',');
-            for (let 索引 = 0; 索引 < 分段陣列.length; 索引++) if (分段陣列[索引]) 策略列表.push({類型: 類型值, 參數: 分段陣列[索引]});
-        };
-        for (let 索引 = 0; 索引 < 代理策略順序.length; 索引++) {
-            const 鍵索引 = 代理策略順序[索引];
-            鍵索引 === 'socks' ? 加入策略(通道設定, 1) : 鍵索引 === 'http' ? 加入策略(超文本設定, 2) : 0;
+    let 網址字串 = 請求.url, 清理路徑 = 網址字串.slice(網址字串.indexOf('/', 10) + 1), 路徑長度 = 清理路徑.length, 策略列表 = [];
+    if (路徑長度 > 3 && 清理路徑.charCodeAt(路徑長度 - 4) === 47 && 清理路徑.charCodeAt(路徑長度 - 3) === 84 && 清理路徑.charCodeAt(路徑長度 - 2) === 117 && 清理路徑.charCodeAt(路徑長度 - 1) === 110) {
+        清理路徑 = 清理路徑.slice(0, 路徑長度 - 4);
+    } else {
+        const 字元碼 = 清理路徑.charCodeAt(路徑長度 - 1);
+        if (字元碼 === 47 || 字元碼 === 61) 清理路徑 = 清理路徑.slice(0, 路徑長度 - 1);
+    }
+    const 已快取列表 = 網址列表快取字典[清理路徑];
+    if (已快取列表 !== undefined) {
+        策略列表 = 已快取列表;
+    } else {
+        if (清理路徑.length < 6) {策略列表.push({類型: 0}, {類型: 3, 參數: 機房到代理映射.get(請求.cf?.colo) ?? 代理位址表.US})} else {
+            參數匹配正則.lastIndex = 0;
+            let 匹配項, 暫指標 = Object.create(null);
+            while ((匹配項 = 參數匹配正則.exec(清理路徑))) 暫指標[(匹配項[1] || 匹配項[3]).toLowerCase()] = 匹配項[2] ? (匹配項[2].charCodeAt(匹配項[2].length - 1) === 61 ? 匹配項[2].slice(0, -1) : 匹配項[2]) : true;
+            const 通道設定 = 暫指標.gs5 || 暫指標.s5all || 暫指標.s5 || 暫指標.socks, 超文本設定 = 暫指標.ghttp || 暫指標.httpall || 暫指標.http;
+            const 全域代理 = !!(暫指標.gs5 || 暫指標.s5all || 暫指標.ghttp || 暫指標.httpall || 暫指標.proxyall || 暫指標.globalproxy);
+            if (!全域代理) 策略列表.push({類型: 0});
+            const 加入策略 = (暫值, 類型值) => {
+                if (!暫值) return;
+                const 分段陣列 = decodeURIComponent(暫值).split(',');
+                for (let 索引 = 0; 索引 < 分段陣列.length; 索引++) if (分段陣列[索引]) 策略列表.push({類型: 類型值, 參數: 分段陣列[索引]});
+            };
+            for (let 索引 = 0; 索引 < 代理策略順序.length; 索引++) {
+                const 鍵索引 = 代理策略順序[索引];
+                鍵索引 === 'socks' ? 加入策略(通道設定, 1) : 鍵索引 === 'http' ? 加入策略(超文本設定, 2) : 0;
+            }
+            if (全域代理) {if (!策略列表.length) 策略列表.push({類型: 0})} else {
+                加入策略(暫指標.ip, 3);
+                策略列表.push({類型: 3, 參數: 機房到代理映射.get(請求.cf?.colo) ?? 代理位址表.US});
+            }
         }
-        if (全域代理) {if (!策略列表.length) 策略列表.push({類型: 0})} else {
-            加入策略(暫指標.ip, 3);
-            策略列表.push({類型: 3, 參數: 機房到代理映射.get(請求.cf?.colo) ?? 代理位址表.US});
-        }
+        const 舊鍵 = 網址列表快取鍵[網址列表快取索引];
+        if (舊鍵 !== undefined) delete 網址列表快取字典[舊鍵];
+        網址列表快取鍵[網址列表快取索引] = 清理路徑;
+        網址列表快取字典[清理路徑] = 策略列表;
+        網址列表快取索引 = (網址列表快取索引 + 1) % 網址參數快取限制;
     }
     for (let 索引 = 0; 索引 < 策略列表.length; 索引++) {
         try {
@@ -213,23 +232,11 @@ const 建立傳輸控制連線 = async (已解析請求, 請求) => {
     }
     return null;
 };
-const 區塊索引查找表 = new Uint8Array(60);
-for (let 索引 = 0; 索引 < 60; 索引++) {
-    let 長度 = 索引 << 9;
-    if (長度 < 1536) 區塊索引查找表[索引] = 0;
-    else if (長度 < 2048) 區塊索引查找表[索引] = 1;
-    else if (長度 < 2560) 區塊索引查找表[索引] = 2;
-    else if (長度 < 3072) 區塊索引查找表[索引] = 3;
-    else if (長度 < 3584) 區塊索引查找表[索引] = 4;
-    else if (長度 < 4096) 區塊索引查找表[索引] = 5;
-    else if (長度 < 5120) 區塊索引查找表[索引] = 6;
-    else if (長度 < 6144) 區塊索引查找表[索引] = 7;
-    else if (長度 < 7168) 區塊索引查找表[索引] = 8;
-    else if (長度 < 8192) 區塊索引查找表[索引] = 9;
-    else if (長度 < 12288) 區塊索引查找表[索引] = 10;
-    else if (長度 < 20480) 區塊索引查找表[索引] = 11;
-    else 區塊索引查找表[索引] = 12;
-}
+const 區塊索引查找表 = new Uint8Array([
+    0, 0, 0, 1, 2, 3, 4, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 10, 10,
+    10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12
+]);
 const 下限陣列 = new Uint16Array([1024, 1536, 2048, 2560, 3072, 3584, 4096, 5120, 6144, 7168, 8192, 12288, 20480, 28672]);
 const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
     const 安全緩衝區大小 = 緩衝區大小 - 最大區塊長度, 快速刷新偏移量 = Math.max(緩衝區大小 / 刷新時間 * 2, 最大區塊長度 * 2);
@@ -306,45 +313,64 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
     } catch {關閉連線?.(), 已關閉 = true} finally {正在讀取 = false, 刷新輸出()}
 };
 const 建立緩衝傳輸控制寫入器 = (寫入函式, 關閉連線) => {
-    let 佇列 = [], 合併緩衝區 = null, 計時器識別 = null, 已關閉 = false;
+    let 寫入佇列 = [], 備用佇列 = [], 聚合緩衝區 = null, 排空中 = false, 已關閉 = false;
     const 關閉寫入器 = () => {
         if (已關閉) return;
-        已關閉 = true;
-        計時器識別 && (clearTimeout(計時器識別), 計時器識別 = null);
-        佇列.length = 0, 關閉連線?.();
+        已關閉 = true, 寫入佇列.length = 0, 備用佇列.length = 0, 關閉連線?.();
     };
-    const 排空 = () => {
-        計時器識別 = null;
+    const 排空佇列 = async () => {
         if (已關閉) return;
-        let 頭部 = 0, 長度 = 佇列.length;
-        while (頭部 < 長度 && !已關閉) {
-            const 資料 = 佇列[頭部];
-            let 位元組長度 = 資料.byteLength, 結束 = 頭部 + 1;
-            while (結束 < 長度) {
-                const 下一長度 = 位元組長度 + 佇列[結束].byteLength;
-                if (下一長度 > 最大區塊長度) break;
-                位元組長度 = 下一長度, 結束++;
-            }
-            if (結束 === 頭部 + 1) {
-                頭部++, 寫入函式.write(資料).catch(關閉寫入器);
-            } else {
-                const 輸出 = 合併緩衝區 ||= new Uint8Array(最大區塊長度);
-                輸出.set(資料);
-                for (let 偏移量 = 資料.byteLength, 索引 = 頭部 + 1; 索引 < 結束; 索引++) {
-                    const 佇列項目 = 佇列[索引];
-                    輸出.set(佇列項目, 偏移量), 偏移量 += 佇列項目.byteLength;
+        排空中 = true;
+        try {
+            while (寫入佇列.length && !已關閉) {
+                const 佇列 = 寫入佇列;
+                寫入佇列 = 備用佇列;
+                備用佇列 = 佇列;
+                let 索引 = 0, 佇列長度 = 佇列.length;
+                while (索引 < 佇列長度 && !已關閉) {
+                    const 區塊 = 佇列[索引];
+                    let 聚合長度 = 區塊.byteLength, 聚合結束 = 索引 + 1;
+                    if (聚合長度 < 最大區塊長度) {
+                        while (聚合結束 < 佇列長度) {
+                            const 下一長度 = 聚合長度 + 佇列[聚合結束].byteLength;
+                            if (下一長度 > 最大區塊長度) break;
+                            聚合長度 = 下一長度, 聚合結束++;
+                        }
+                    }
+                    if (聚合結束 === 索引 + 1) {
+                        佇列[索引++] = undefined;
+                        await 寫入函式.write(區塊);
+                    } else {
+                        const 緩衝區 = 聚合緩衝區 ||= new Uint8Array(最大區塊長度);
+                        緩衝區.set(區塊);
+                        佇列[索引++] = undefined;
+                        for (let 偏移量 = 區塊.byteLength; 索引 < 聚合結束;) {
+                            const 下一區塊 = 佇列[索引];
+                            佇列[索引++] = undefined;
+                            緩衝區.set(下一區塊, 偏移量), 偏移量 += 下一區塊.byteLength;
+                        }
+                        await 寫入函式.write(緩衝區.subarray(0, 聚合長度));
+                    }
                 }
-                頭部 = 結束, 寫入函式.write(輸出.subarray(0, 位元組長度)).catch(關閉寫入器);
+                佇列.length = 0;
+            }
+        } catch {關閉寫入器()} finally {
+            排空中 = false;
+            if (寫入佇列.length && !已關閉) {
+                排空中 = true;
+                queueMicrotask(排空佇列);
             }
         }
-        佇列.length = 0;
     };
     return (區塊值) => {
         if (已關閉) return false;
         const 資料 = 區塊值 instanceof Uint8Array ? 區塊值 : new Uint8Array(區塊值);
         if (!資料.byteLength) return true;
-        佇列.push(資料);
-        !計時器識別 && !已關閉 && (計時器識別 = setTimeout(排空, 1));
+        寫入佇列.push(資料);
+        if (!排空中) {
+            排空中 = true;
+            queueMicrotask(排空佇列);
+        }
         return true;
     };
 };
@@ -368,9 +394,8 @@ const 處理網頁套接字連線 = async (網頁套接字連線, 請求) => {
             傳輸控制插槽 = await 建立傳輸控制連線(已解析請求, 請求);
             if (!傳輸控制插槽) return 關閉連線();
             const 寫入函式 = 傳輸控制插槽.writable.getWriter();
-            const 緩衝傳輸控制寫入器 = 建立緩衝傳輸控制寫入器(寫入函式, 關閉連線);
             if (負載資料.byteLength) 寫入函式.write(負載資料);
-            傳輸控制寫入器 = 緩衝傳輸控制寫入器;
+            傳輸控制寫入器 = 建立緩衝傳輸控制寫入器(寫入函式, 關閉連線);
             手動資料管線(傳輸控制插槽.readable, 網頁套接字連線, 關閉連線);
         } catch {關閉連線()}
     };
