@@ -306,57 +306,45 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
     } catch {關閉連線?.(), 已關閉 = true} finally {正在讀取 = false, 刷新輸出()}
 };
 const 建立緩衝傳輸控制寫入器 = (寫入函式, 關閉連線) => {
-    let 寫入佇列 = [], 排空佇列 = [], 合併緩衝區 = null, 忙碌 = false, 已關閉 = false;
+    let 佇列 = [], 合併緩衝區 = null, 計時器識別 = null, 已關閉 = false;
     const 關閉寫入器 = () => {
         if (已關閉) return;
-        已關閉 = true, 寫入佇列.length = 0, 排空佇列.length = 0, 關閉連線?.();
+        已關閉 = true;
+        計時器識別 && (clearTimeout(計時器識別), 計時器識別 = null);
+        佇列.length = 0, 關閉連線?.();
     };
-    const 排空 = async () => {
-        if (忙碌 || 已關閉) return;
-        忙碌 = true;
-        try {
-            while (寫入佇列.length && !已關閉) {
-                const 任務 = 寫入佇列;
-                寫入佇列 = 排空佇列;
-                排空佇列 = 任務;
-                let 頭部 = 0, 任務長度 = 任務.length;
-                while (頭部 < 任務長度 && !已關閉) {
-                    const 資料 = 任務[頭部];
-                    let 長度 = 資料.byteLength, 結束 = 頭部 + 1;
-                    if (長度 < 最大區塊長度) {
-                        while (結束 < 任務長度) {
-                            const 下一長度 = 長度 + 任務[結束].byteLength;
-                            if (下一長度 > 最大區塊長度) break;
-                            長度 = 下一長度, 結束++;
-                        }
-                    }
-                    if (結束 === 頭部 + 1) {
-                        任務[頭部++] = undefined;
-                        await 寫入函式.write(資料);
-                    } else {
-                        const 輸出 = 合併緩衝區 ||= new Uint8Array(最大區塊長度);
-                        輸出.set(資料);
-                        任務[頭部++] = undefined;
-                        for (let 偏移量 = 資料.byteLength; 頭部 < 結束;) {
-                            const 佇列項目 = 任務[頭部];
-                            任務[頭部++] = undefined;
-                            輸出.set(佇列項目, 偏移量), 偏移量 += 佇列項目.byteLength;
-                        }
-                        await 寫入函式.write(輸出.subarray(0, 長度));
-                    }
-                }
-                任務.length = 0;
+    const 排空 = () => {
+        計時器識別 = null;
+        if (已關閉) return;
+        let 頭部 = 0, 長度 = 佇列.length;
+        while (頭部 < 長度 && !已關閉) {
+            const 資料 = 佇列[頭部];
+            let 位元組長度 = 資料.byteLength, 結束 = 頭部 + 1;
+            while (結束 < 長度) {
+                const 下一長度 = 位元組長度 + 佇列[結束].byteLength;
+                if (下一長度 > 最大區塊長度) break;
+                位元組長度 = 下一長度, 結束++;
             }
-        } catch {關閉寫入器()} finally {
-            忙碌 = false;
-            寫入佇列.length && !已關閉 && 排空();
+            if (結束 === 頭部 + 1) {
+                頭部++, 寫入函式.write(資料).catch(關閉寫入器);
+            } else {
+                const 輸出 = 合併緩衝區 ||= new Uint8Array(最大區塊長度);
+                輸出.set(資料);
+                for (let 偏移量 = 資料.byteLength, 索引 = 頭部 + 1; 索引 < 結束; 索引++) {
+                    const 佇列項目 = 佇列[索引];
+                    輸出.set(佇列項目, 偏移量), 偏移量 += 佇列項目.byteLength;
+                }
+                頭部 = 結束, 寫入函式.write(輸出.subarray(0, 位元組長度)).catch(關閉寫入器);
+            }
         }
+        佇列.length = 0;
     };
     return (區塊值) => {
         if (已關閉) return false;
         const 資料 = 區塊值 instanceof Uint8Array ? 區塊值 : new Uint8Array(區塊值);
         if (!資料.byteLength) return true;
-        寫入佇列.push(資料), !忙碌 && 排空();
+        佇列.push(資料);
+        !計時器識別 && !已關閉 && (計時器識別 = setTimeout(排空, 1));
         return true;
     };
 };
