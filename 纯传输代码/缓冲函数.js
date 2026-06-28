@@ -9,7 +9,7 @@ const chunkIdxLookup = new Uint8Array([
 ]);
 const lowerBounds = new Uint16Array([1024, 1536, 2048, 2560, 3072, 3584, 4096, 5120, 6144, 7168, 8192, 12288, 20480, 28672]);
 const manualPipe = async (readable, writable, close) => {
-    const safeBufferSize = bufferSize - maxChunkLen, fastFlushOffset = Math.max(bufferSize / flushTime * 2, maxChunkLen * 2);
+    const safeBufferSize = bufferSize - maxChunkLen, fastFlushOffset = Math.max((bufferSize / flushTime) << 1, maxChunkLen << 1);
     let buffer = new ArrayBuffer(bufferSize), spareBuffer = new ArrayBuffer(maxChunkLen), bufferView = new Uint8Array(buffer);
     let offset = 0, totalBytes = 0, time = 1, timerId = null, resume = null, isReading = false, needsFlush = false, protectFlush = false;
     let globalCount = new Uint32Array(14), globalBytes = new Uint32Array(14);
@@ -67,7 +67,7 @@ const manualPipe = async (readable, writable, close) => {
     } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer()}
 };
 const manualPipe = async (readable, writable, close) => {
-    const safeBufferSize = bufferSize - maxChunkLen, fastFlushOffset = bufferSize >> 1;
+    const safeBufferSize = bufferSize - maxChunkLen, fastFlushOffset = Math.max((bufferSize / flushTime) << 1, maxChunkLen << 1);;
     let buffer = new ArrayBuffer(bufferSize), spareBuffer = new ArrayBuffer(maxChunkLen), bufferView = new Uint8Array(buffer);
     let offset = 0, totalBytes = 0, time = 1, timerId = null, resume = null, isReading = false, needsFlush = false, protectFlush = false;
     let isClose = false, fastFlush = true;
@@ -108,7 +108,7 @@ const manualPipe = async (readable, writable, close) => {
     } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer()}
 };
 const manualPipe = async (readable, writable, close) => {
-    const safeBufferSize = bufferSize - maxChunkLen, halfChunkLen = maxChunkLen >> 1, directBufSize = halfChunkLen * 3, fastFlushOffset = bufferSize >> 1;
+    const safeBufferSize = bufferSize - maxChunkLen, halfChunkLen = maxChunkLen >> 1, directBufSize = halfChunkLen * 3, fastFlushOffset = Math.max((bufferSize / flushTime) << 1, maxChunkLen << 1);;
     let buffer, bufferView, spareBuffer = new ArrayBuffer(maxChunkLen);
     let offset = 0, totalBytes = 0, timerId = null, resume = null, isReading = false, needsFlush = false, protectFlush = false;
     let directBuf = new Uint8Array(directBufSize), directOff = 0, directTimer = null, isClose = false, fastFlush = true;
@@ -178,7 +178,7 @@ const manualPipe = async (readable, writable, close) => {
     } catch {close?.(), isClose = true} finally {isReading = false, flushDirect(), flushBuffer()}
 };
 const manualPipe = async (readable, writable, close) => {
-    const safeBufferSize = bufferSize - maxChunkLen, halfChunkLen = maxChunkLen >> 1, directBufSize = halfChunkLen * 3, fastFlushOffset = bufferSize >> 1;
+    const safeBufferSize = bufferSize - maxChunkLen, halfChunkLen = maxChunkLen >> 1, directBufSize = halfChunkLen * 3, fastFlushOffset = Math.max((bufferSize / flushTime) << 1, maxChunkLen << 1);;
     let buffer, bufferView, spareBuffer = new ArrayBuffer(maxChunkLen);
     let offset = 0, totalBytes = 0, timerId = null, resume = null, isReading = false, needsFlush = false, protectFlush = false;
     let directBuf = new Uint8Array(directBufSize), directOff = 0, directTimer = null, isClose = false, fastFlush = true;
