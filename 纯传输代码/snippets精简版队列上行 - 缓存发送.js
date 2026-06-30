@@ -5,10 +5,10 @@ const uuid = 'd342d11e-d424-4583-b36e-524ab1f0afa4';//vless使用的uuid
 //**警告**:trojan使用的sha224密钥，需要自己计算，当前设置为密码666的密钥
 //**警告**:trojan使用的sha224密钥计算网址：https://www.lzltool.com/data-sha224
 const passWordSha224 = '509eece82eb6910bebef9af9496092d3244b6c0d69ef3aaa4b12c565';
-const bufferSize = 512 * 1024;
+const bufferSize = 192 * 1024;
 const startThreshold = 50 * 1024 * 1024;
 const maxChunkLen = 64 * 1024;
-const flushTime = 10;
+const flushTime = 3;
 const urlParamCacheLimit = 20;
 const proxyStrategyOrder = ['socks', 'http'];
 const proxyIpAddrs = {EU: 'ProxyIP.DE.CMLiussss.net', AS: 'ProxyIP.SG.CMLiussss.net', JP: 'ProxyIP.JP.CMLiussss.net', US: 'ProxyIP.US.CMLiussss.net'};//分区域proxyip
@@ -237,20 +237,25 @@ const establishTcpConnection = async (parsedRequest, request) => {
     return null;
 };
 const manualPipe = async (readable, writable, close) => {
-    const safeBufferSize = bufferSize - maxChunkLen, fastFlushOffset = Math.max((bufferSize / flushTime) << 1, maxChunkLen << 1);
+    const safeBufferSize = bufferSize - maxChunkLen, fastFlushOffset = maxChunkLen << 1;
     let buffer = new ArrayBuffer(bufferSize), spareBuffer = new ArrayBuffer(maxChunkLen), bufferView = new Uint8Array(buffer);
-    let offset = 0, totalBytes = 0, time = 0, timerId = null, resume = null, isReading = false, needsFlush = false, protectFlush = false;
+    let offset = 0, totalBytes = 0, time = 0, timerId = null, resume = null, isReading = false, needsFlush = false, protectFlush = false, flushDelayCount = 0;
     let isClose = false, fastFlush = true;
-    const flushBuffer = () => {
+    const flushBuffer = (force = false) => {
         if (isReading) return needsFlush = true;
         fastFlush = offset < fastFlushOffset;
+        if (!force && offset > 0 && offset < fastFlushOffset && !isClose && flushDelayCount < 1) {
+            flushDelayCount++, needsFlush = false;
+            timerId && clearTimeout(timerId), timerId = setTimeout(flushBuffer, 1);
+            return;
+        }
         if (offset > 0 && !isClose) {
             offset > safeBufferSize
                 ? (writable.send(bufferView.subarray(0, offset)), buffer = new ArrayBuffer(bufferSize), bufferView = new Uint8Array(buffer))
                 : writable.send(bufferView.slice(0, offset));
             offset = 0;
         }
-        needsFlush = false, protectFlush = false, timerId && (clearTimeout(timerId), timerId = null), resume?.(), resume = null;
+        needsFlush = false, protectFlush = false, flushDelayCount = 0, timerId && (clearTimeout(timerId), timerId = null), resume?.(), resume = null;
     };
     const reader = readable.getReader({mode: 'byob'});
     try {
@@ -264,18 +269,22 @@ const manualPipe = async (readable, writable, close) => {
             useSpare ? (bufferView.set(value, offset), spareBuffer = value.buffer) : (buffer = value.buffer, bufferView = new Uint8Array(buffer));
             if (done) break;
             const chunkLen = value.byteLength;
+            if (!chunkLen) {
+                needsFlush && flushBuffer();
+                continue;
+            }
             offset += chunkLen;
             if (needsFlush) {
                 flushBuffer();
             } else {
                 if (fastFlush || chunkLen < 28672) {
-                    totalBytes = 0, time = 0;
+                    totalBytes = 0, time = 1;
                 } else if ((totalBytes += chunkLen) > startThreshold) time = flushTime;
                 timerId ||= setTimeout(flushBuffer, time), protectFlush = chunkLen < maxChunkLen;
                 offset > safeBufferSize && (time === flushTime ? await new Promise(r => resume = r) : flushBuffer());
             }
         }
-    } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer()}
+    } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer(true)}
 };
 const createBufferedTcpWriter = (tcpWriter, close) => {
     const queue = new Array(4096);
