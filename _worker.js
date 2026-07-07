@@ -1024,7 +1024,7 @@ const handleGrpcPost = async (request, reader, buffer, used) => {
                         const grpcLen = ((bufToProcess[offset + 1] << 24) >>> 0) | (bufToProcess[offset + 2] << 16) | (bufToProcess[offset + 3] << 8) | bufToProcess[offset + 4];
                         const frameSize = 5 + grpcLen;
                         if (bufLen - offset >= frameSize) {
-                            const grpcData = bufToProcess.subarray(offset + 5, offset + frameSize);
+                            const grpcData = bufToProcess.slice(offset + 5, offset + frameSize);
                             offset += frameSize;
                             let p = grpcData[0] === 0x0A ? 1 : 0;
                             while (p && grpcData[p++] & 0x80) ;
