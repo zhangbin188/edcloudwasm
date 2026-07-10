@@ -959,7 +959,7 @@ const manualPipe = async (readable, writable, close) => {
                     totalBytes = 0, time = 1;
                 } else if ((totalBytes += chunkLen) > startThreshold) time = flushTime;
                 timerId ||= setTimeout(flushBuffer, time), protectFlush = chunkLen < maxChunkLen;
-                offset > safeBufferSize && (time === flushTime ? await new Promise(r => resume = r) : flushBuffer());
+                offset > safeBufferSize && (otalBytes > startThreshold ? await new Promise(r => resume = r) : flushBuffer());
             }
         }
     } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer(true)}
